@@ -1280,7 +1280,11 @@ class Tilda_Admin {
 		}
 		$tildapage->js = [];
 		foreach ( $arJS as $file ) {
-			$tildapage->js[] = $upload_path . 'js/' . $file->to;
+			$js_entry = [ 'src' => $upload_path . 'js/' . $file->to ];
+			if ( ! empty( $file->attrs ) ) {
+				$js_entry['attrs'] = (array) $file->attrs;
+			}
+			$tildapage->js[] = $js_entry;
 			$arDownload[]    = [
 				'from_url' => self::add_cache_buster( $file->from ),
 				'to_dir'   => $upload_dir . 'js/' . $file->to,
