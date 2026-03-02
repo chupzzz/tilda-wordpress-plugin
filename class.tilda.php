@@ -227,13 +227,14 @@ class Tilda {
 		$arTmp      = [];
 		$downloaded = 0;
 		foreach ( $arDownload as $file ) {
-			if ( time() - Tilda_Admin::$ts_start_plugin > 5 ) {
+			if ( time() - Tilda_Admin::$ts_start_plugin > 20 ) {
 				$arTmp[] = $file;
 			} else {
 				if ( ! file_exists( $file['to_dir'] ) || strpos( $file['to_dir'], '/pages/' ) === false ) {
 
 					$content = self::getRemoteFile( $file['from_url'] );
 					if ( is_wp_error( $content ) ) {
+						$arTmp[] = $file;
 						continue;
 					}
 
@@ -250,8 +251,14 @@ class Tilda {
 						continue;
 					}
 
+					$to_dir = dirname( $file['to_dir'] );
+					if ( ! is_dir( $to_dir ) ) {
+						wp_mkdir_p( $to_dir );
+					}
+
 					if ( file_put_contents( $file['to_dir'], $content ) === false ) {
 						self::$errors->add( 'error_download', 'Cannot save file to [' . $file['to_dir'] . '].' );
+						$arTmp[] = $file;
 						continue;
 					}
 				}
@@ -486,6 +493,7 @@ class Tilda {
 				curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
 				curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
 				curl_setopt( $curl, CURLOPT_ENCODING, '' );
+				curl_setopt( $curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1 );
 				$out = curl_exec( $curl );
 				curl_close( $curl );
 			} else {
@@ -779,34 +787,51 @@ class Tilda {
 
 	public static function getRemoteFile( $url ) {
 		if ( function_exists( 'curl_init' ) ) {
-			if ( $curl = curl_init() ) {
-				curl_setopt( $curl, CURLOPT_URL, $url );
-				curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
-				curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
-				curl_setopt( $curl, CURLOPT_ENCODING, '' );
-				curl_setopt( $curl, CURLOPT_CONNECTTIMEOUT, 10 );
-				curl_setopt( $curl, CURLOPT_TIMEOUT, 30 );
-				$out       = curl_exec( $curl );
-				$http_code = curl_getinfo( $curl, CURLINFO_HTTP_CODE );
-				$err       = curl_error( $curl );
-				curl_close( $curl );
+			$max_retries = 3;
+			for ( $attempt = 1; $attempt <= $max_retries; $attempt++ ) {
+				if ( $curl = curl_init() ) {
+					curl_setopt( $curl, CURLOPT_URL, $url );
+					curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
+					curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
+					curl_setopt( $curl, CURLOPT_ENCODING, '' );
+					curl_setopt( $curl, CURLOPT_CONNECTTIMEOUT, 10 );
+					curl_setopt( $curl, CURLOPT_TIMEOUT, 30 );
+					curl_setopt( $curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1 );
+					$out       = curl_exec( $curl );
+					$http_code = curl_getinfo( $curl, CURLINFO_HTTP_CODE );
+					$err       = curl_error( $curl );
+					curl_close( $curl );
 
-				if ( $out === false ) {
-					self::$errors->add( 'download_error', 'Cannot download file: ' . $url . ' Error: ' . $err );
+					if ( $out !== false && $http_code < 400 ) {
+						return $out;
+					}
+
+					if ( $attempt < $max_retries ) {
+						sleep( 1 );
+						continue;
+					}
+
+					if ( $out === false ) {
+						self::$errors->add( 'download_error', 'Cannot download file: ' . $url . ' Error: ' . $err );
+
+						return self::$errors;
+					}
+
+					if ( $http_code >= 400 ) {
+						self::$errors->add( 'download_error', 'HTTP error ' . $http_code . ' for file: ' . $url );
+
+						return self::$errors;
+					}
+				} else {
+					self::$errors->add( 'download_error', 'Cannot get file: ' . $url );
 
 					return self::$errors;
 				}
-
-				if ( $http_code >= 400 ) {
-					self::$errors->add( 'download_error', 'HTTP error ' . $http_code . ' for file: ' . $url );
-
-					return self::$errors;
-				}
-			} else {
-				self::$errors->add( 'download_error', 'Cannot get file: ' . $url );
-
-				return self::$errors;
 			}
+
+			self::$errors->add( 'download_error', 'Cannot download file after retries: ' . $url );
+
+			return self::$errors;
 		} else {
 			$out = file_get_contents( $url );
 			if ( $out === false ) {
