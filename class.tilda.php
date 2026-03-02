@@ -207,6 +207,10 @@ class Tilda {
 
 		$arDownload = Tilda_Admin::export_tilda_page( $page_id, $project_id, $post_id );
 
+		if ( is_wp_error( $arDownload ) ) {
+			return;
+		}
+
 		wp_schedule_single_event( time() + 1, 'tilda_sync_single_export_file', [ $arDownload ] );
 	}
 
@@ -215,6 +219,10 @@ class Tilda {
 			require_once( TILDA_PLUGIN_DIR . 'class.tilda-admin.php' );
 		}
 		Tilda_Admin::$ts_start_plugin = time();
+
+		if ( ! is_array( $arDownload ) ) {
+			return;
+		}
 
 		$arTmp      = [];
 		$downloaded = 0;
@@ -226,14 +234,25 @@ class Tilda {
 
 					$content = self::getRemoteFile( $file['from_url'] );
 					if ( is_wp_error( $content ) ) {
-						echo self::json_errors();
-						wp_die();
+						continue;
+					}
+
+					/* replace  short jQuery function $(...) to jQuery(...) */
+					if (
+						strpos( $file['to_dir'], 'tilda-blocks-' ) !== false
+						&& strpos( $file['to_dir'], '.js' ) !== false
+					) {
+						$content = str_replace( '$(', 'jQuery(', $content );
+						$content = str_replace( '$.', 'jQuery.', $content );
+					}
+
+					if ( strlen( $content ) === 0 ) {
+						continue;
 					}
 
 					if ( file_put_contents( $file['to_dir'], $content ) === false ) {
 						self::$errors->add( 'error_download', 'Cannot save file to [' . $file['to_dir'] . '].' );
-						echo self::json_errors();
-						wp_die();
+						continue;
 					}
 				}
 				$downloaded ++;
@@ -763,9 +782,26 @@ class Tilda {
 			if ( $curl = curl_init() ) {
 				curl_setopt( $curl, CURLOPT_URL, $url );
 				curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
-				curl_setopt( $curl, CURLOPT_ENCODING , '' );
-				$out = curl_exec( $curl );
+				curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
+				curl_setopt( $curl, CURLOPT_ENCODING, '' );
+				curl_setopt( $curl, CURLOPT_CONNECTTIMEOUT, 10 );
+				curl_setopt( $curl, CURLOPT_TIMEOUT, 30 );
+				$out       = curl_exec( $curl );
+				$http_code = curl_getinfo( $curl, CURLINFO_HTTP_CODE );
+				$err       = curl_error( $curl );
 				curl_close( $curl );
+
+				if ( $out === false ) {
+					self::$errors->add( 'download_error', 'Cannot download file: ' . $url . ' Error: ' . $err );
+
+					return self::$errors;
+				}
+
+				if ( $http_code >= 400 ) {
+					self::$errors->add( 'download_error', 'HTTP error ' . $http_code . ' for file: ' . $url );
+
+					return self::$errors;
+				}
 			} else {
 				self::$errors->add( 'download_error', 'Cannot get file: ' . $url );
 
@@ -773,6 +809,11 @@ class Tilda {
 			}
 		} else {
 			$out = file_get_contents( $url );
+			if ( $out === false ) {
+				self::$errors->add( 'download_error', 'Cannot download file: ' . $url );
+
+				return self::$errors;
+			}
 		}
 
 		return $out;

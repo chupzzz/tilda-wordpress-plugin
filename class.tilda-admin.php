@@ -1047,9 +1047,7 @@ class Tilda_Admin {
 
 		$options = get_option( Tilda_Admin::OPTION_OPTIONS );
 
-		$exportimages  = [];
-		$replaceimages = [];
-		$upload_path   = Tilda::get_upload_path() . $tildapage->projectid . '/pages/' . $tildapage->id . '/';
+		$upload_path = Tilda::get_upload_path() . $tildapage->projectid . '/pages/' . $tildapage->id . '/';
 
 		$uniq = [];
 
@@ -1062,20 +1060,17 @@ class Tilda_Admin {
 				$uniq[ $image->from ] = 1;
 
 				if ( $export_imgpath > '' ) {
-					$exportimages[] = '|' . $export_imgpath . $image->to . '|i';
+					$search = $export_imgpath . $image->to;
 				} else {
-					$exportimages[] = '|' . $image->to . '|i';
+					$search = $image->to;
 				}
 				if ( isset( $options['storageforfiles'] ) && $options['storageforfiles'] == 'cdn' ) {
-					$replaceimages[] = $image->from;
+					$replace = $image->from;
 				} else {
-					$replaceimages[] = $upload_path . $image->to;
+					$replace = $upload_path . $image->to;
 				}
+				$tildapage->html = str_replace( $search, $replace, $tildapage->html );
 			}
-		}
-		$html = preg_replace( $exportimages, $replaceimages, $tildapage->html );
-		if ( $html ) {
-			$tildapage->html = $html;
 		}
 
 		return $tildapage;
@@ -1202,6 +1197,9 @@ class Tilda_Admin {
 		// remove all css <link> occurrences that was already added to the <header> tag
 		foreach ( $tildapage->css as $css ) {
 			$tildapage->html = str_replace( '<link rel="stylesheet" href="' . $css->to . '">', '', $tildapage->html );
+			$tildapage->html = str_replace( '<link rel="stylesheet" href="' . $css->to . '" />', '', $tildapage->html );
+			$tildapage->html = str_replace( "<link rel='stylesheet' href='" . $css->to . "'>", '', $tildapage->html );
+			$tildapage->html = str_replace( "<link rel='stylesheet' href='" . $css->to . "' />", '', $tildapage->html );
 		}
 
 		Tilda_Admin::update_local_map( Tilda_Admin::MAP_PAGE_POSTS, $page_id, $post_id );
@@ -1330,7 +1328,7 @@ class Tilda_Admin {
 
 		if ( empty( $tildaoptions['storageforfiles'] ) || $tildaoptions['storageforfiles'] == 'local' ) {
 			$upload_dir = Tilda::get_upload_dir() . $project->id . '/pages/' . $tildapage->id . '/';
-			if ( ! is_dir( $upload_dir ) && ! mkdir( $upload_dir, 0755 ) ) {
+			if ( ! is_dir( $upload_dir ) && ! wp_mkdir_p( $upload_dir ) ) {
 				Tilda::$errors->add( 'no_directory', 'Cannot create directory: ' . $upload_dir );
 
 				return Tilda::$errors;
@@ -1498,11 +1496,11 @@ class Tilda_Admin {
 						$content = str_replace( '$.', 'jQuery.', $content );
 					}
 
-					$parts     = explode( '.', strtolower( $file['from_url'] ) );
-					$extension = array_pop( $parts );
+					$url_path  = parse_url( $file['from_url'], PHP_URL_PATH );
+					$extension = $url_path ? pathinfo( strtolower( $url_path ), PATHINFO_EXTENSION ) : '';
 
 					if (
-						in_array( $extension, [ 'jpg', 'jpeg', 'png', 'gif', 'svg', 'ico' ] )
+						in_array( $extension, [ 'jpg', 'jpeg', 'png', 'gif', 'svg', 'ico', 'webp' ] )
 						&& (
 							strpos( $content, 'The resource could not be found.' ) !== false
 							|| strpos( strtolower( $content ), 'not found.' ) !== false
@@ -1510,7 +1508,19 @@ class Tilda_Admin {
 					) {
 						$downloaded ++;
 						continue;
-					} elseif ( file_put_contents( $file['to_dir'], $content ) === false ) {
+					}
+
+					if ( strlen( $content ) === 0 ) {
+						$downloaded ++;
+						continue;
+					}
+
+					$to_dir = dirname( $file['to_dir'] );
+					if ( ! is_dir( $to_dir ) ) {
+						wp_mkdir_p( $to_dir );
+					}
+
+					if ( file_put_contents( $file['to_dir'], $content ) === false ) {
 						Tilda::$errors->add( 'error_download', 'Cannot save file to [' . $file['to_dir'] . '].' );
 						echo Tilda::json_errors();
 						wp_die();
