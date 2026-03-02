@@ -1496,8 +1496,8 @@ class Tilda_Admin {
 						$content = str_replace( '$.', 'jQuery.', $content );
 					}
 
-					$url_path  = strtolower( parse_url( $file['from_url'], PHP_URL_PATH ) );
-					$extension = pathinfo( $url_path, PATHINFO_EXTENSION );
+					$url_path  = parse_url( $file['from_url'], PHP_URL_PATH );
+					$extension = $url_path ? pathinfo( strtolower( $url_path ), PATHINFO_EXTENSION ) : '';
 
 					if (
 						in_array( $extension, [ 'jpg', 'jpeg', 'png', 'gif', 'svg', 'ico', 'webp' ] )
