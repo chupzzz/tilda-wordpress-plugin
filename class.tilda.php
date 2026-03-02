@@ -104,7 +104,7 @@ class Tilda {
 		self::$initiated = true;
 		self::$errors    = new WP_Error();
 
-		define( 'TILDA_API_URL', 'http://api.tildacdn.info/v1/' );
+		define( 'TILDA_API_URL', 'https://api.tildacdn.info/v1/' );
 		define( 'TILDA_PUBLIC_KEY', self::get_public_key() );
 		define( 'TILDA_SECRET_KEY', self::get_secret_key() );
 
@@ -190,7 +190,7 @@ class Tilda {
 			intval( $_REQUEST['project_id'] ),
 			$maps[ intval( $_REQUEST['page_id'] ) ]
 		] );
-		echo 'OK';
+		echo 'ok';
 		wp_die();
 	}
 
@@ -227,13 +227,14 @@ class Tilda {
 		$arTmp      = [];
 		$downloaded = 0;
 		foreach ( $arDownload as $file ) {
-			if ( time() - Tilda_Admin::$ts_start_plugin > 5 ) {
+			if ( time() - Tilda_Admin::$ts_start_plugin > 20 ) {
 				$arTmp[] = $file;
 			} else {
 				if ( ! file_exists( $file['to_dir'] ) || strpos( $file['to_dir'], '/pages/' ) === false ) {
 
 					$content = self::getRemoteFile( $file['from_url'] );
 					if ( is_wp_error( $content ) ) {
+						$arTmp[] = $file;
 						continue;
 					}
 
@@ -250,8 +251,14 @@ class Tilda {
 						continue;
 					}
 
+					$to_dir = dirname( $file['to_dir'] );
+					if ( ! is_dir( $to_dir ) ) {
+						wp_mkdir_p( $to_dir );
+					}
+
 					if ( file_put_contents( $file['to_dir'], $content ) === false ) {
 						self::$errors->add( 'error_download', 'Cannot save file to [' . $file['to_dir'] . '].' );
+						$arTmp[] = $file;
 						continue;
 					}
 				}
@@ -331,9 +338,44 @@ class Tilda {
 				}
 
 				if ( is_array( $js_links ) ) {
+					$js_attrs_map = [];
 					foreach ( $js_links as $file ) {
-						$name = basename( $file );
-						wp_enqueue_script( $name, $file, false, $ver );
+						if ( is_array( $file ) ) {
+							$src          = $file['src'];
+							$script_attrs = isset( $file['attrs'] ) ? (array) $file['attrs'] : [];
+						} else {
+							$src          = $file;
+							$script_attrs = [];
+						}
+						$name = basename( $src );
+						wp_enqueue_script( $name, $src, false, $ver );
+						if ( ! empty( $script_attrs ) ) {
+							$js_attrs_map[ $name ] = $script_attrs;
+						}
+					}
+					if ( ! empty( $js_attrs_map ) ) {
+						add_filter(
+							'script_loader_tag',
+							static function ( $tag, $handle ) use ( $js_attrs_map ) {
+								if ( ! isset( $js_attrs_map[ $handle ] ) ) {
+									return $tag;
+								}
+								foreach ( $js_attrs_map[ $handle ] as $attr ) {
+									// Never add defer to head scripts — deferred scripts run after
+									// DOM parsing and break inline code that depends on them.
+									if ( strtolower( $attr ) === 'defer' ) {
+										continue;
+									}
+									$attr = esc_attr( $attr );
+									if ( ! preg_match( '/ ' . preg_quote( $attr, '/' ) . '[\s>\/]/', $tag ) ) {
+										$tag = str_replace( '<script ', '<script ' . $attr . ' ', $tag );
+									}
+								}
+								return $tag;
+							},
+							10,
+							2
+						);
 					}
 				}
 			} else {
@@ -485,7 +527,7 @@ class Tilda {
 				curl_setopt( $curl, CURLOPT_URL, $url );
 				curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
 				curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
-				curl_setopt( $curl, CURLOPT_ENCODING, '' );
+				curl_setopt( $curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1 );
 				$out = curl_exec( $curl );
 				curl_close( $curl );
 			} else {
@@ -778,44 +820,85 @@ class Tilda {
 	}
 
 	public static function getRemoteFile( $url ) {
+		$max_attempts = 3;
+
 		if ( function_exists( 'curl_init' ) ) {
-			if ( $curl = curl_init() ) {
+			// Use direct cURL without CURLOPT_ENCODING so no Accept-Encoding header
+			// is sent and the CDN returns raw uncompressed bytes, avoiding cURL error 18.
+			$out       = false;
+			$http_code = 0;
+			$err       = '';
+			$errno     = 0;
+			for ( $attempt = 1; $attempt <= $max_attempts; $attempt++ ) {
+				$curl = curl_init();
 				curl_setopt( $curl, CURLOPT_URL, $url );
 				curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
 				curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
-				curl_setopt( $curl, CURLOPT_ENCODING, '' );
+				curl_setopt( $curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1 );
+				curl_setopt( $curl, CURLOPT_USERAGENT, 'Mozilla/5.0' );
 				curl_setopt( $curl, CURLOPT_CONNECTTIMEOUT, 10 );
 				curl_setopt( $curl, CURLOPT_TIMEOUT, 30 );
 				$out       = curl_exec( $curl );
 				$http_code = curl_getinfo( $curl, CURLINFO_HTTP_CODE );
 				$err       = curl_error( $curl );
+				$errno     = curl_errno( $curl );
 				curl_close( $curl );
 
-				if ( $out === false ) {
-					self::$errors->add( 'download_error', 'Cannot download file: ' . $url . ' Error: ' . $err );
-
-					return self::$errors;
+				// errno 0 means no error; anything else (including 18 CURLE_PARTIAL_FILE)
+				// means the transfer failed even if $out is a non-false partial string.
+				if ( $errno === 0 ) {
+					break;
 				}
 
-				if ( $http_code >= 400 ) {
-					self::$errors->add( 'download_error', 'HTTP error ' . $http_code . ' for file: ' . $url );
-
-					return self::$errors;
+				if ( $attempt < $max_attempts ) {
+					sleep( 1 );
 				}
-			} else {
-				self::$errors->add( 'download_error', 'Cannot get file: ' . $url );
+			}
+
+			if ( $errno !== 0 ) {
+				self::$errors->add( 'download_error', 'Cannot download file: ' . $url . ' Error: cURL error ' . $errno . ': ' . $err );
 
 				return self::$errors;
 			}
-		} else {
-			$out = file_get_contents( $url );
-			if ( $out === false ) {
-				self::$errors->add( 'download_error', 'Cannot download file: ' . $url );
+
+			if ( $http_code >= 400 ) {
+				self::$errors->add( 'download_error', 'HTTP error ' . $http_code . ' for file: ' . $url );
 
 				return self::$errors;
+			}
+
+			return $out;
+		}
+
+		// Fallback: wp_remote_get when cURL is unavailable.
+		for ( $attempt = 1; $attempt <= $max_attempts; $attempt++ ) {
+			$response = wp_remote_get( $url, [
+				'timeout'     => 30,
+				'httpversion' => '1.1',
+				'user-agent'  => 'Mozilla/5.0',
+				'decompress'  => false,
+			] );
+			if ( ! is_wp_error( $response ) ) {
+				break;
+			}
+			if ( $attempt < $max_attempts ) {
+				sleep( 1 );
 			}
 		}
 
-		return $out;
+		if ( is_wp_error( $response ) ) {
+			self::$errors->add( 'download_error', 'Cannot download file: ' . $url . ' Error: ' . $response->get_error_message() );
+
+			return self::$errors;
+		}
+
+		$http_code = wp_remote_retrieve_response_code( $response );
+		if ( $http_code >= 400 ) {
+			self::$errors->add( 'download_error', 'HTTP error ' . $http_code . ' for file: ' . $url );
+
+			return self::$errors;
+		}
+
+		return wp_remote_retrieve_body( $response );
 	}
 }

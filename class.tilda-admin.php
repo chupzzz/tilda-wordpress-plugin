@@ -1040,6 +1040,19 @@ class Tilda_Admin {
 		update_option( Tilda_Admin::OPTION_MAPS, $maps );
 	}
 
+	/**
+	 * Add cache-busting parameter to URL to avoid stale CDN content
+	 *
+	 * @param string $url
+	 *
+	 * @return string
+	 */
+	private static function add_cache_buster( $url ) {
+		$separator = ( strpos( $url, '?' ) !== false ) ? '&' : '?';
+
+		return $url . $separator . 't=' . time();
+	}
+
 	public static function replace_outer_image_to_local( $tildapage, $export_imgpath = '' ) {
 		if ( $export_imgpath > '' && substr( $export_imgpath, - 1 ) !== '/' ) {
 			$export_imgpath .= '/';
@@ -1059,17 +1072,38 @@ class Tilda_Admin {
 				}
 				$uniq[ $image->from ] = 1;
 
-				if ( $export_imgpath > '' ) {
-					$search = $export_imgpath . $image->to;
-				} else {
-					$search = $image->to;
-				}
 				if ( isset( $options['storageforfiles'] ) && $options['storageforfiles'] == 'cdn' ) {
 					$replace = $image->from;
 				} else {
 					$replace = $upload_path . $image->to;
 				}
-				$tildapage->html = str_replace( $search, $replace, $tildapage->html );
+
+				$replaced = false;
+
+				if ( $export_imgpath > '' ) {
+					$search = $export_imgpath . $image->to;
+					if ( strpos( $tildapage->html, $search ) !== false ) {
+						$tildapage->html = str_replace( $search, $replace, $tildapage->html );
+						$replaced = true;
+					}
+				}
+
+				if ( ! $replaced && strpos( $tildapage->html, $image->to ) !== false ) {
+					$tildapage->html = str_replace( $image->to, $replace, $tildapage->html );
+					$replaced = true;
+				}
+
+				if ( ! $replaced && strpos( $tildapage->html, $image->from ) !== false ) {
+					$tildapage->html = str_replace( $image->from, $replace, $tildapage->html );
+					$replaced = true;
+				}
+
+				if ( ! $replaced ) {
+					$decoded_from = htmlspecialchars_decode( $image->from );
+					if ( $decoded_from !== $image->from && strpos( $tildapage->html, $decoded_from ) !== false ) {
+						$tildapage->html = str_replace( $decoded_from, $replace, $tildapage->html );
+					}
+				}
 			}
 		}
 
@@ -1200,6 +1234,12 @@ class Tilda_Admin {
 			$tildapage->html = str_replace( '<link rel="stylesheet" href="' . $css->to . '" />', '', $tildapage->html );
 			$tildapage->html = str_replace( "<link rel='stylesheet' href='" . $css->to . "'>", '', $tildapage->html );
 			$tildapage->html = str_replace( "<link rel='stylesheet' href='" . $css->to . "' />", '', $tildapage->html );
+			if ( isset( $css->from ) ) {
+				$tildapage->html = str_replace( '<link rel="stylesheet" href="' . $css->from . '">', '', $tildapage->html );
+				$tildapage->html = str_replace( '<link rel="stylesheet" href="' . $css->from . '" />', '', $tildapage->html );
+				$tildapage->html = str_replace( "<link rel='stylesheet' href='" . $css->from . "'>", '', $tildapage->html );
+				$tildapage->html = str_replace( "<link rel='stylesheet' href='" . $css->from . "' />", '', $tildapage->html );
+			}
 		}
 
 		Tilda_Admin::update_local_map( Tilda_Admin::MAP_PAGE_POSTS, $page_id, $post_id );
@@ -1227,9 +1267,8 @@ class Tilda_Admin {
 		$tildapage->css = [];
 		foreach ( $arCSS as $file ) {
 			$tildapage->css[] = $upload_path . 'css/' . $file->to;
-			$timestamp        = substr( $file->from, - 4 ) === '.css' ? ( '?t=' . time() ) : '';
 			$arDownload[]     = [
-				'from_url' => $file->from . $timestamp,
+				'from_url' => self::add_cache_buster( $file->from ),
 				'to_dir'   => $upload_dir . 'css/' . $file->to,
 			];
 		}
@@ -1241,10 +1280,13 @@ class Tilda_Admin {
 		}
 		$tildapage->js = [];
 		foreach ( $arJS as $file ) {
-			$tildapage->js[] = $upload_path . 'js/' . $file->to;
-			$timestamp       = substr( $file->from, - 3 ) === '.js' ? ( '?t=' . time() ) : '';
+			$js_entry = [ 'src' => $upload_path . 'js/' . $file->to ];
+			if ( ! empty( $file->attrs ) ) {
+				$js_entry['attrs'] = (array) $file->attrs;
+			}
+			$tildapage->js[] = $js_entry;
 			$arDownload[]    = [
-				'from_url' => $file->from . $timestamp,
+				'from_url' => self::add_cache_buster( $file->from ),
 				'to_dir'   => $upload_dir . 'js/' . $file->to,
 			];
 		}
