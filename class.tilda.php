@@ -227,13 +227,14 @@ class Tilda {
 		$arTmp      = [];
 		$downloaded = 0;
 		foreach ( $arDownload as $file ) {
-			if ( time() - Tilda_Admin::$ts_start_plugin > 5 ) {
+			if ( time() - Tilda_Admin::$ts_start_plugin > 20 ) {
 				$arTmp[] = $file;
 			} else {
 				if ( ! file_exists( $file['to_dir'] ) || strpos( $file['to_dir'], '/pages/' ) === false ) {
 
 					$content = self::getRemoteFile( $file['from_url'] );
 					if ( is_wp_error( $content ) ) {
+						$arTmp[] = $file;
 						continue;
 					}
 
@@ -250,8 +251,14 @@ class Tilda {
 						continue;
 					}
 
+					$to_dir = dirname( $file['to_dir'] );
+					if ( ! is_dir( $to_dir ) ) {
+						wp_mkdir_p( $to_dir );
+					}
+
 					if ( file_put_contents( $file['to_dir'], $content ) === false ) {
 						self::$errors->add( 'error_download', 'Cannot save file to [' . $file['to_dir'] . '].' );
+						$arTmp[] = $file;
 						continue;
 					}
 				}
