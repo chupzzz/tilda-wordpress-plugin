@@ -828,6 +828,10 @@ class Tilda {
 					return self::$errors;
 				}
 			}
+
+			self::$errors->add( 'download_error', 'Cannot download file after retries: ' . $url );
+
+			return self::$errors;
 		} else {
 			$out = file_get_contents( $url );
 			if ( $out === false ) {
