@@ -493,6 +493,7 @@ class Tilda {
 				curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
 				curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
 				curl_setopt( $curl, CURLOPT_ENCODING, '' );
+				curl_setopt( $curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1 );
 				$out = curl_exec( $curl );
 				curl_close( $curl );
 			} else {
@@ -786,33 +787,46 @@ class Tilda {
 
 	public static function getRemoteFile( $url ) {
 		if ( function_exists( 'curl_init' ) ) {
-			if ( $curl = curl_init() ) {
-				curl_setopt( $curl, CURLOPT_URL, $url );
-				curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
-				curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
-				curl_setopt( $curl, CURLOPT_ENCODING, '' );
-				curl_setopt( $curl, CURLOPT_CONNECTTIMEOUT, 10 );
-				curl_setopt( $curl, CURLOPT_TIMEOUT, 30 );
-				$out       = curl_exec( $curl );
-				$http_code = curl_getinfo( $curl, CURLINFO_HTTP_CODE );
-				$err       = curl_error( $curl );
-				curl_close( $curl );
+			$max_retries = 3;
+			for ( $attempt = 1; $attempt <= $max_retries; $attempt++ ) {
+				if ( $curl = curl_init() ) {
+					curl_setopt( $curl, CURLOPT_URL, $url );
+					curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
+					curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
+					curl_setopt( $curl, CURLOPT_ENCODING, '' );
+					curl_setopt( $curl, CURLOPT_CONNECTTIMEOUT, 10 );
+					curl_setopt( $curl, CURLOPT_TIMEOUT, 30 );
+					curl_setopt( $curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1 );
+					$out       = curl_exec( $curl );
+					$http_code = curl_getinfo( $curl, CURLINFO_HTTP_CODE );
+					$err       = curl_error( $curl );
+					curl_close( $curl );
 
-				if ( $out === false ) {
-					self::$errors->add( 'download_error', 'Cannot download file: ' . $url . ' Error: ' . $err );
+					if ( $out !== false && $http_code < 400 ) {
+						return $out;
+					}
+
+					if ( $attempt < $max_retries ) {
+						sleep( 1 );
+						continue;
+					}
+
+					if ( $out === false ) {
+						self::$errors->add( 'download_error', 'Cannot download file: ' . $url . ' Error: ' . $err );
+
+						return self::$errors;
+					}
+
+					if ( $http_code >= 400 ) {
+						self::$errors->add( 'download_error', 'HTTP error ' . $http_code . ' for file: ' . $url );
+
+						return self::$errors;
+					}
+				} else {
+					self::$errors->add( 'download_error', 'Cannot get file: ' . $url );
 
 					return self::$errors;
 				}
-
-				if ( $http_code >= 400 ) {
-					self::$errors->add( 'download_error', 'HTTP error ' . $http_code . ' for file: ' . $url );
-
-					return self::$errors;
-				}
-			} else {
-				self::$errors->add( 'download_error', 'Cannot get file: ' . $url );
-
-				return self::$errors;
 			}
 		} else {
 			$out = file_get_contents( $url );

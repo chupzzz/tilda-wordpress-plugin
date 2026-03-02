@@ -141,7 +141,9 @@
             
             $.post('admin-ajax.php', data, function(json) {
                 if(!json || json.error > '') {
-                    $('#tilda_block_sync_progress').find('.tilda_sync_label').html(json.error);
+                    var errorMsg = (json && json.error) ? json.error : 'Unknown error during file download';
+                    $('#tilda_block_sync_progress').find('.tilda_sync_label').html(errorMsg);
+                    $('#ajaxsync').removeAttr('disabled').removeClass('disabled');
                 } else if(json.total_download > 0 ){
                     var tilda_count_download = json.count_downloaded;
                     
@@ -166,7 +168,11 @@
                     $('#ajaxsync').removeAttr('disabled').removeClass('disabled');
                     window.location.reload();
                 }
-            },'json');
+            },'json').fail(function(jqXHR, textStatus, errorThrown) {
+                var errorMsg = 'Sync error: ' + (errorThrown || textStatus || 'connection failed');
+                $('#tilda_block_sync_progress').find('.tilda_sync_label').html(errorMsg);
+                $('#ajaxsync').removeAttr('disabled').removeClass('disabled');
+            });
             
         }
         
@@ -186,7 +192,9 @@
             
             $.post('admin-ajax.php', data, function(json) {
                 if(!json || json.error > '') {
-                    $('#tilda_block_sync_progress').find('.tilda_sync_label').html(json.error);
+                    var errorMsg = (json && json.error) ? json.error : 'Unknown sync error';
+                    $('#tilda_block_sync_progress').find('.tilda_sync_label').html(errorMsg);
+                    $('#ajaxsync').removeAttr('disabled').removeClass('disabled');
                 } else if(json.total_download > 0 ){
                     var html = '';
                     for(i=0;i<json.total_download;i++) {
@@ -197,8 +205,13 @@
                     tilda_export_files();
                 } else {
                     $('#tilda_block_sync_progress').find('.tilda_sync_label').html('Sync completed successfully. <a href="javascript:window.location.reload()">Refresh page</a>');
+                    $('#ajaxsync').removeAttr('disabled').removeClass('disabled');
                 }
-            },'json');
+            },'json').fail(function(jqXHR, textStatus, errorThrown) {
+                var errorMsg = 'Sync error: ' + (errorThrown || textStatus || 'connection failed');
+                $('#tilda_block_sync_progress').find('.tilda_sync_label').html(errorMsg);
+                $('#ajaxsync').removeAttr('disabled').removeClass('disabled');
+            });
         }
         
         $('#ajaxsync').click(function(){
